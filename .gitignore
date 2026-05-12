@@ -1,0 +1,9 @@
+# Build artifacts
+bin/
+bpf/sniffer.bpf.o
+bpf/vmlinux.h
+
+# Test artifacts
+/tmp/
+*.pcap
+sniffer
