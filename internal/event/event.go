@@ -80,10 +80,11 @@ type StreamKey struct {
 
 // Assembler buffers partial reads and emits assembled events.
 type Assembler struct {
-	mu     sync.Mutex
-	bufs   map[StreamKey]*partialBuffer
-	Output chan *AssembledEvent
+	mu       sync.Mutex
+	bufs     map[StreamKey]*partialBuffer
+	Output   chan *AssembledEvent
 	bootTime time.Time
+	pool     sync.Pool
 }
 
 type partialBuffer struct {
@@ -93,12 +94,34 @@ type partialBuffer struct {
 	data      []byte
 }
 
+const partialBufInitialCap = 4096
+
 func NewAssembler() *Assembler {
-	return &Assembler{
+	a := &Assembler{
 		bufs:     make(map[StreamKey]*partialBuffer),
 		Output:   make(chan *AssembledEvent, 64),
 		bootTime: computeBootTime(),
 	}
+	a.pool = sync.Pool{
+		New: func() any {
+			return &partialBuffer{
+				data: make([]byte, 0, partialBufInitialCap),
+			}
+		},
+	}
+	return a
+}
+
+func (a *Assembler) getBuffer() *partialBuffer {
+	return a.pool.Get().(*partialBuffer)
+}
+
+func (a *Assembler) putBuffer(buf *partialBuffer) {
+	buf.comm = ""
+	buf.direction = 0
+	buf.timestamp = 0
+	buf.data = buf.data[:0]
+	a.pool.Put(buf)
 }
 
 // computeBootTime reads /proc/uptime to determine the system boot time.
@@ -128,25 +151,20 @@ func (a *Assembler) Feed(ev *TLSEvent) {
 	existing, ok := a.bufs[key]
 
 	if ok && existing.direction == ev.Direction {
-		// Same stream, same direction: append data
 		existing.data = append(existing.data, ev.Data[:ev.DataLen]...)
-		// Keep the earliest timestamp
 		return
 	}
 
-	// Different direction or new stream: flush existing if any
 	if ok {
 		a.flush(key, existing)
 	}
 
-	// Start new buffer
-	a.bufs[key] = &partialBuffer{
-		comm:      ev.CommString(),
-		direction: ev.Direction,
-		timestamp: ev.Timestamp,
-		data:      make([]byte, ev.DataLen),
-	}
-	copy(a.bufs[key].data, ev.Data[:ev.DataLen])
+	buf := a.getBuffer()
+	buf.comm = ev.CommString()
+	buf.direction = ev.Direction
+	buf.timestamp = ev.Timestamp
+	buf.data = append(buf.data, ev.Data[:ev.DataLen]...)
+	a.bufs[key] = buf
 }
 
 // FlushAll flushes all remaining buffers.
@@ -161,6 +179,7 @@ func (a *Assembler) FlushAll() {
 func (a *Assembler) flush(key StreamKey, buf *partialBuffer) {
 	delete(a.bufs, key)
 	if len(buf.data) == 0 {
+		a.putBuffer(buf)
 		return
 	}
 	ev := &AssembledEvent{
@@ -170,9 +189,10 @@ func (a *Assembler) flush(key StreamKey, buf *partialBuffer) {
 		Comm:      buf.comm,
 		Direction: buf.direction,
 		Timestamp: a.ktimeToWall(buf.timestamp),
-		Data:      buf.data,
+		Data:      append([]byte(nil), buf.data...),
 	}
-	ev.HTTP = TryParseHTTP(buf.data)
+	ev.HTTP = TryParseHTTP(ev.Data)
+	a.putBuffer(buf)
 	a.Output <- ev
 }
 
