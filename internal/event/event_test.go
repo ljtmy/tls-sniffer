@@ -188,3 +188,31 @@ func TestAssembler_DifferentPIDs(t *testing.T) {
 		t.Fatalf("expected 2 events (different PIDs), got %d", len(events))
 	}
 }
+
+func TestAssembler_TimeoutFlush(t *testing.T) {
+	a := NewAssemblerWithTimeout(50 * time.Millisecond)
+	defer func() {
+		close(a.stopCh)
+		a.flushTicker.Stop()
+		close(a.Output)
+	}()
+
+	a.Feed(newTestEvent(1, 1, 0x1000, DirSend, []byte("slow data")))
+
+	// No output yet (buffer is still open)
+	events := drainOutput(a.Output)
+	if len(events) != 0 {
+		t.Fatal("expected no output before timeout")
+	}
+
+	// Wait for the timeout flush to trigger
+	time.Sleep(200 * time.Millisecond)
+
+	events = drainOutput(a.Output)
+	if len(events) != 1 {
+		t.Fatalf("expected 1 event after timeout flush, got %d", len(events))
+	}
+	if string(events[0].Data) != "slow data" {
+		t.Errorf("expected 'slow data', got '%s'", string(events[0].Data))
+	}
+}

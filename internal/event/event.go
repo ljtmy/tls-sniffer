@@ -8,6 +8,11 @@ import (
 	"time"
 )
 
+const (
+	// DefaultFlushTimeout is the maximum time a partial buffer waits before being flushed.
+	DefaultFlushTimeout = 2 * time.Second
+)
+
 const MaxDataSize = 4096
 
 const (
@@ -80,27 +85,38 @@ type StreamKey struct {
 
 // Assembler buffers partial reads and emits assembled events.
 type Assembler struct {
-	mu       sync.Mutex
-	bufs     map[StreamKey]*partialBuffer
-	Output   chan *AssembledEvent
-	bootTime time.Time
-	pool     sync.Pool
+	mu          sync.Mutex
+	bufs        map[StreamKey]*partialBuffer
+	Output      chan *AssembledEvent
+	bootTime    time.Time
+	pool        sync.Pool
+	stopCh      chan struct{}
+	flushTicker *time.Ticker
+	flushTimeout time.Duration
 }
 
 type partialBuffer struct {
-	comm      string
-	direction uint32
-	timestamp uint64 // first chunk ktime_ns
-	data      []byte
+	comm       string
+	direction  uint32
+	timestamp  uint64 // first chunk ktime_ns
+	lastUpdate time.Time
+	data       []byte
 }
 
 const partialBufInitialCap = 4096
 
 func NewAssembler() *Assembler {
+	return NewAssemblerWithTimeout(DefaultFlushTimeout)
+}
+
+// NewAssemblerWithTimeout creates an Assembler with a custom flush timeout.
+func NewAssemblerWithTimeout(timeout time.Duration) *Assembler {
 	a := &Assembler{
-		bufs:     make(map[StreamKey]*partialBuffer),
-		Output:   make(chan *AssembledEvent, 64),
-		bootTime: computeBootTime(),
+		bufs:         make(map[StreamKey]*partialBuffer),
+		Output:       make(chan *AssembledEvent, 64),
+		bootTime:     computeBootTime(),
+		stopCh:       make(chan struct{}),
+		flushTimeout: timeout,
 	}
 	a.pool = sync.Pool{
 		New: func() any {
@@ -109,19 +125,47 @@ func NewAssembler() *Assembler {
 			}
 		},
 	}
+	a.flushTicker = time.NewTicker(timeout)
+	go a.flushLoop()
 	return a
 }
 
 func (a *Assembler) getBuffer() *partialBuffer {
-	return a.pool.Get().(*partialBuffer)
+	buf := a.pool.Get().(*partialBuffer)
+	buf.lastUpdate = time.Now()
+	return buf
 }
 
 func (a *Assembler) putBuffer(buf *partialBuffer) {
 	buf.comm = ""
 	buf.direction = 0
 	buf.timestamp = 0
+	buf.lastUpdate = time.Time{}
 	buf.data = buf.data[:0]
 	a.pool.Put(buf)
+}
+
+// flushLoop periodically flushes stale buffers that haven't received new data.
+func (a *Assembler) flushLoop() {
+	for {
+		select {
+		case <-a.stopCh:
+			return
+		case <-a.flushTicker.C:
+			a.flushStale()
+		}
+	}
+}
+
+func (a *Assembler) flushStale() {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	now := time.Now()
+	for key, buf := range a.bufs {
+		if now.Sub(buf.lastUpdate) >= a.flushTimeout {
+			a.flush(key, buf)
+		}
+	}
 }
 
 // computeBootTime reads /proc/uptime to determine the system boot time.
@@ -152,6 +196,7 @@ func (a *Assembler) Feed(ev *TLSEvent) {
 
 	if ok && existing.direction == ev.Direction {
 		existing.data = append(existing.data, ev.Data[:ev.DataLen]...)
+		existing.lastUpdate = time.Now()
 		return
 	}
 
@@ -167,8 +212,10 @@ func (a *Assembler) Feed(ev *TLSEvent) {
 	a.bufs[key] = buf
 }
 
-// FlushAll flushes all remaining buffers.
+// FlushAll flushes all remaining buffers and stops the background flush loop.
 func (a *Assembler) FlushAll() {
+	close(a.stopCh)
+	a.flushTicker.Stop()
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	for key, buf := range a.bufs {
