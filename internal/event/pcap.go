@@ -11,7 +11,8 @@ import (
 	"time"
 )
 
-const pcapBufSize = 64 * 1024 // 64KB write buffer
+const pcapBufSize = 64 * 1024   // 64KB write buffer
+const maxPacketBufSize = 65535 // snapLen
 
 // PCAP constants
 const (
@@ -45,12 +46,13 @@ type ConnLookup func(pid uint32, sslPtr uint64) (PcapConnInfo, bool)
 
 // PCAPWriter writes assembled TLS events as pseudo-TCP packets to a pcap file.
 type PCAPWriter struct {
-	mu      sync.Mutex
-	w       io.Writer
-	file    *os.File
-	seqs    map[streamSeqKey]uint32
-	ipCache map[uint32]uint32 // PID -> pseudo IP
-	connFn  ConnLookup       // optional: real connection info
+	mu        sync.Mutex
+	w         io.Writer
+	file      *os.File
+	seqs      map[streamSeqKey]uint32
+	ipCache   map[uint32]uint32 // PID -> pseudo IP
+	connFn    ConnLookup        // optional: real connection info
+	packetBuf sync.Pool         // reusable packet buffers
 }
 
 // NewPCAPWriter creates a pcap file and writes the global header.
@@ -67,6 +69,12 @@ func NewPCAPWriter(path string) (*PCAPWriter, error) {
 		file:    f,
 		seqs:    make(map[streamSeqKey]uint32),
 		ipCache: make(map[uint32]uint32),
+		packetBuf: sync.Pool{
+			New: func() any {
+				buf := make([]byte, maxPacketBufSize)
+				return &buf
+			},
+		},
 	}
 
 	if err := pw.writeGlobalHeader(); err != nil {
@@ -98,8 +106,9 @@ func (pw *PCAPWriter) Write(ev *AssembledEvent) {
 	payload := ev.Data
 	ts := ev.Timestamp
 
-	// Build IP + TCP header + payload
-	packet := pw.buildPacket(srcIP, dstIP, srcPort, dstPort, payload, ts)
+	// Build IP + TCP header + payload using pooled buffer
+	bufPtr := pw.packetBuf.Get().(*[]byte)
+	packet := pw.buildPacket(*bufPtr, srcIP, dstIP, srcPort, dstPort, payload, ts)
 
 	// Update sequence number
 	key := streamSeqKey{srcIP, dstIP, srcPort, dstPort}
@@ -107,6 +116,9 @@ func (pw *PCAPWriter) Write(ev *AssembledEvent) {
 
 	// Write pcap packet record
 	pw.writePacketRecord(ts, packet)
+
+	// Return buffer to pool
+	pw.packetBuf.Put(bufPtr)
 }
 
 // Close flushes the buffer and closes the pcap file.
@@ -168,12 +180,12 @@ func (pw *PCAPWriter) pseudoIP(pid uint32) uint32 {
 	return ip
 }
 
-func (pw *PCAPWriter) buildPacket(srcIP, dstIP uint32, srcPort, dstPort uint16, payload []byte, ts time.Time) []byte {
+func (pw *PCAPWriter) buildPacket(prealloc []byte, srcIP, dstIP uint32, srcPort, dstPort uint16, payload []byte, ts time.Time) []byte {
 	ipHdrLen := 20
 	tcpHdrLen := 20
 	totalLen := ipHdrLen + tcpHdrLen + len(payload)
 
-	buf := make([]byte, totalLen)
+	buf := prealloc[:totalLen]
 
 	// IPv4 header
 	buf[0] = 0x45                                // version 4, IHL 5

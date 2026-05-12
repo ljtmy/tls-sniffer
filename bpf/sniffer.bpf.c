@@ -59,7 +59,7 @@ static __always_inline void submit_event(struct pt_regs *ctx,
     if (!should_capture(pid))
         return;
 
-    if (len <= 0)
+    if (len == 0)
         return;
 
     struct tls_event *event;
@@ -95,6 +95,9 @@ int uprobe_ssl_write(struct pt_regs *ctx)
     void *buf = (void *)PT_REGS_PARM2(ctx);
     int num = (int)PT_REGS_PARM3(ctx);
 
+    if (num <= 0)
+        return 0;
+
     submit_event(ctx, buf, num, DIR_SEND, ssl);
     return 0;
 }
@@ -107,6 +110,9 @@ int uprobe_ssl_write_ex(struct pt_regs *ctx)
     void *ssl = (void *)PT_REGS_PARM1(ctx);
     void *buf = (void *)PT_REGS_PARM2(ctx);
     size_t num = (size_t)PT_REGS_PARM3(ctx);
+
+    if (num == 0)
+        return 0;
 
     submit_event(ctx, buf, num, DIR_SEND, ssl);
     return 0;
@@ -158,6 +164,7 @@ int uprobe_ssl_read_ex(struct pt_regs *ctx)
     struct read_state state = {
         .buf = (void *)PT_REGS_PARM2(ctx),
         .ssl = (void *)PT_REGS_PARM1(ctx),
+        .readbytes = (void *)PT_REGS_PARM4(ctx),
     };
     bpf_map_update_elem(&read_entries, &tid, &state, BPF_ANY);
     return 0;
@@ -176,12 +183,10 @@ int uretprobe_ssl_read_ex(struct pt_regs *ctx)
     int ret = (int)PT_REGS_RC(ctx);
     void *ssl = state->ssl;
 
-    // For _ex variant, readbytes is written to *readbytes (PARM4)
-    // We saved PARM2 as buf, PARM1 as ssl.
-    // Since the return is just success/fail, read the *readbytes pointer.
-    size_t *readbytes_ptr = (size_t *)PT_REGS_PARM4(ctx);
+    // Use the saved readbytes pointer from entry, not PARM4 which is invalid at return
     size_t readbytes = 0;
-    bpf_probe_read_user(&readbytes, sizeof(readbytes), readbytes_ptr);
+    if (state->readbytes)
+        bpf_probe_read_user(&readbytes, sizeof(readbytes), state->readbytes);
 
     void *buf = state->buf;
 

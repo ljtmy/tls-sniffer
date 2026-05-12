@@ -6,6 +6,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unsafe"
 )
 
 const (
@@ -14,6 +15,7 @@ const (
 )
 
 const MaxDataSize = 4096
+const ExpectedTLSEventSize = 4152 // must match C struct tls_event
 
 const (
 	DirSend = 0
@@ -24,6 +26,13 @@ const (
 	EventData     = 0
 	EventConnInfo = 1
 )
+
+func init() {
+	var ev TLSEvent
+	if unsafe.Sizeof(ev) != ExpectedTLSEventSize {
+		panic("TLSEvent Go struct size does not match C struct tls_event")
+	}
+}
 
 // TLSEvent mirrors the C struct tls_event from sniffer.h.
 type TLSEvent struct {

@@ -8,7 +8,7 @@ BPF_OBJ := bpf/sniffer.bpf.o
 BPF_HEADERS := bpf/sniffer.h
 VMLINUX_H := bpf/vmlinux.h
 
-.PHONY: all clean build bpf vmlinux
+.PHONY: all clean build bpf vmlinux test
 
 all: bpf build
 
@@ -28,3 +28,6 @@ build:
 
 clean:
 	rm -f $(BPF_OBJ) bin/sniffer
+
+test:
+	$(GO) test ./...

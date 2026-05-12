@@ -9,7 +9,7 @@ import (
 
 func TestJSONWriter_OutputFormat(t *testing.T) {
 	var buf bytes.Buffer
-	jw := &JSONWriter{w: &buf}
+	jw := newJSONWriter(&buf)
 
 	ev := &AssembledEvent{
 		PID:       1234,
@@ -48,7 +48,7 @@ func TestJSONWriter_OutputFormat(t *testing.T) {
 
 func TestJSONWriter_RecvDirection(t *testing.T) {
 	var buf bytes.Buffer
-	jw := &JSONWriter{w: &buf}
+	jw := newJSONWriter(&buf)
 
 	ev := &AssembledEvent{
 		PID:       100,
@@ -71,7 +71,7 @@ func TestJSONWriter_RecvDirection(t *testing.T) {
 
 func TestJSONWriter_WithHTTP(t *testing.T) {
 	var buf bytes.Buffer
-	jw := &JSONWriter{w: &buf}
+	jw := newJSONWriter(&buf)
 
 	ev := &AssembledEvent{
 		PID:       100,
@@ -108,7 +108,7 @@ func TestJSONWriter_WithHTTP(t *testing.T) {
 
 func TestJSONWriter_JSONLinesFormat(t *testing.T) {
 	var buf bytes.Buffer
-	jw := &JSONWriter{w: &buf}
+	jw := newJSONWriter(&buf)
 
 	for i := 0; i < 3; i++ {
 		ev := &AssembledEvent{
@@ -136,7 +136,7 @@ func TestJSONWriter_JSONLinesFormat(t *testing.T) {
 
 func TestJSONWriter_EmptyData(t *testing.T) {
 	var buf bytes.Buffer
-	jw := &JSONWriter{w: &buf}
+	jw := newJSONWriter(&buf)
 
 	ev := &AssembledEvent{
 		PID:       1,

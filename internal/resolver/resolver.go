@@ -52,30 +52,6 @@ func defaultSymbols(lt LibType) []string {
 	}
 }
 
-// ResolveAll resolves the file offsets for multiple SSL symbols in the given PID's libssl.
-// Returns the library path and a map of symbol name -> file offset.
-// Symbols not found are silently skipped.
-func ResolveAll(pid int, symbols []string) (libPath string, offsets map[string]uint64, err error) {
-	libPath, err = findLibSSL(pid)
-	if err != nil {
-		return "", nil, fmt.Errorf("find libssl: %w", err)
-	}
-
-	offsets = make(map[string]uint64)
-	for _, sym := range symbols {
-		off, err := resolveSymbolOffset(libPath, sym)
-		if err == nil {
-			offsets[sym] = off
-		}
-	}
-
-	if len(offsets) == 0 {
-		return "", nil, fmt.Errorf("no symbols found in %s", libPath)
-	}
-
-	return libPath, offsets, nil
-}
-
 // ResolveAllLibs discovers all TLS libraries for the given PID and resolves
 // default symbols for each. Returns a list of LibInfo, one per discovered library.
 func ResolveAllLibs(pid int) ([]LibInfo, error) {
@@ -148,26 +124,6 @@ func ResolveAllLibs(pid int) ([]LibInfo, error) {
 	}
 
 	return libs, nil
-}
-
-// findLibSSL scans /proc/pid/maps to find the path of libssl.so.
-func findLibSSL(pid int) (string, error) {
-	mapsPath := filepath.Join("/proc", fmt.Sprintf("%d", pid), "maps")
-	data, err := os.ReadFile(mapsPath)
-	if err != nil {
-		return "", fmt.Errorf("read %s: %w", mapsPath, err)
-	}
-
-	for _, line := range strings.Split(string(data), "\n") {
-		if strings.Contains(line, "libssl") && strings.Contains(line, "r-xp") {
-			fields := strings.Fields(line)
-			if len(fields) >= 6 {
-				return strings.TrimSpace(fields[5]), nil
-			}
-		}
-	}
-
-	return "", fmt.Errorf("libssl.so not found in maps for pid %d", pid)
 }
 
 // resolveSymbolOffset reads the ELF symbol table and returns the file offset

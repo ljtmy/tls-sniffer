@@ -26,6 +26,7 @@ struct tls_event {
 struct read_state {
     void *buf;
     void *ssl;
+    void *readbytes; // used by SSL_read_ex to store *readbytes pointer
 };
 
 #endif /* __SNIFFER_H__ */

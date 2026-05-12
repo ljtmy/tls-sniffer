@@ -130,11 +130,23 @@ func TestTryParseHTTP_AllMethods(t *testing.T) {
 	}
 }
 
-func TestTryParseHTTP_NoCRLF(t *testing.T) {
-	// Missing double CRLF separator
+func TestTryParseHTTP_LFOnly(t *testing.T) {
+	// LF-only line endings should also be accepted
 	data := []byte("GET /path HTTP/1.1\nHost: x.com\n\n")
 	result := TryParseHTTP(data)
-	if result != nil {
-		t.Error("expected nil for LF-only line endings (no CRLF)")
+	if result == nil {
+		t.Fatal("expected non-nil for LF-only line endings")
+	}
+	if !result.IsRequest {
+		t.Error("expected IsRequest=true")
+	}
+	if result.Method != "GET" {
+		t.Errorf("expected method GET, got %s", result.Method)
+	}
+	if result.URI != "/path" {
+		t.Errorf("expected URI /path, got %s", result.URI)
+	}
+	if result.Headers["Host"] != "x.com" {
+		t.Errorf("expected Host x.com, got %s", result.Headers["Host"])
 	}
 }

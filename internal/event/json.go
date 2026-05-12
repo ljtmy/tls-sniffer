@@ -3,7 +3,6 @@ package event
 import (
 	"encoding/hex"
 	"encoding/json"
-	"fmt"
 	"io"
 	"os"
 )
@@ -22,11 +21,15 @@ type jsonEvent struct {
 
 // JSONWriter writes assembled TLS events as JSON Lines (one JSON object per line).
 type JSONWriter struct {
-	w io.Writer
+	enc *json.Encoder
 }
 
 func NewJSONWriter() *JSONWriter {
-	return &JSONWriter{w: os.Stdout}
+	return newJSONWriter(os.Stdout)
+}
+
+func newJSONWriter(w io.Writer) *JSONWriter {
+	return &JSONWriter{enc: json.NewEncoder(w)}
 }
 
 func (jw *JSONWriter) Write(ev *AssembledEvent) {
@@ -40,12 +43,7 @@ func (jw *JSONWriter) Write(ev *AssembledEvent) {
 		DataHex:   hex.EncodeToString(ev.Data),
 		HTTP:      ev.HTTP,
 	}
-
-	data, err := json.Marshal(je)
-	if err != nil {
-		return
-	}
-	fmt.Fprintln(jw.w, string(data))
+	jw.enc.Encode(je)
 }
 
 func (jw *JSONWriter) Close() error {

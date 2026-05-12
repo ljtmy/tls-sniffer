@@ -3,7 +3,6 @@ package event
 import (
 	"bytes"
 	"strconv"
-	"strings"
 )
 
 // ParsedHTTP represents a parsed HTTP/1.x request or response extracted from TLS plaintext.
@@ -45,22 +44,22 @@ func TryParseHTTP(data []byte) *ParsedHTTP {
 }
 
 func parseRequest(data []byte) *ParsedHTTP {
-	// Find end of headers
-	headerEnd := bytes.Index(data, []byte("\r\n\r\n"))
+	// Find end of headers (support both CRLF and LF-only)
+	headerEnd, lineSep, delimLen := findHeaderEnd(data)
 	if headerEnd < 0 {
 		return nil
 	}
 
-	headerPart := string(data[:headerEnd])
-	body := data[headerEnd+4:]
+	headerPart := data[:headerEnd]
+	body := data[headerEnd+delimLen:]
 
 	// Parse request line
-	lines := strings.Split(headerPart, "\r\n")
+	lines := bytes.Split(headerPart, lineSep)
 	if len(lines) < 1 {
 		return nil
 	}
 
-	parts := strings.SplitN(lines[0], " ", 3)
+	parts := bytes.SplitN(lines[0], []byte(" "), 3)
 	if len(parts) < 3 {
 		return nil
 	}
@@ -69,48 +68,48 @@ func parseRequest(data []byte) *ParsedHTTP {
 
 	return &ParsedHTTP{
 		IsRequest: true,
-		Method:    parts[0],
-		URI:       parts[1],
-		Proto:     parts[2],
+		Method:    string(parts[0]),
+		URI:       string(parts[1]),
+		Proto:     string(parts[2]),
 		Headers:   headers,
 		Body:      body,
 	}
 }
 
 func parseResponse(data []byte) *ParsedHTTP {
-	headerEnd := bytes.Index(data, []byte("\r\n\r\n"))
+	headerEnd, lineSep, delimLen := findHeaderEnd(data)
 	if headerEnd < 0 {
 		return nil
 	}
 
-	headerPart := string(data[:headerEnd])
-	body := data[headerEnd+4:]
+	headerPart := data[:headerEnd]
+	body := data[headerEnd+delimLen:]
 
-	lines := strings.Split(headerPart, "\r\n")
+	lines := bytes.Split(headerPart, lineSep)
 	if len(lines) < 1 {
 		return nil
 	}
 
-	parts := strings.SplitN(lines[0], " ", 3)
+	parts := bytes.SplitN(lines[0], []byte(" "), 3)
 	if len(parts) < 2 {
 		return nil
 	}
 
-	statusCode, err := strconv.Atoi(parts[1])
+	statusCode, err := strconv.Atoi(string(parts[1]))
 	if err != nil {
 		return nil
 	}
 
 	statusText := ""
 	if len(parts) >= 3 {
-		statusText = parts[2]
+		statusText = string(parts[2])
 	}
 
 	headers := parseHeaders(lines[1:])
 
 	return &ParsedHTTP{
 		IsRequest:  false,
-		Proto:      parts[0],
+		Proto:      string(parts[0]),
 		StatusCode: statusCode,
 		StatusText: statusText,
 		Headers:    headers,
@@ -118,15 +117,27 @@ func parseResponse(data []byte) *ParsedHTTP {
 	}
 }
 
-func parseHeaders(lines []string) map[string]string {
+// findHeaderEnd finds the end of HTTP headers, supporting both CRLF and LF-only.
+// Returns (headerEnd, lineSeparator, delimiterLength).
+func findHeaderEnd(data []byte) (int, []byte, int) {
+	if idx := bytes.Index(data, []byte("\r\n\r\n")); idx >= 0 {
+		return idx, []byte("\r\n"), 4
+	}
+	if idx := bytes.Index(data, []byte("\n\n")); idx >= 0 {
+		return idx, []byte("\n"), 2
+	}
+	return -1, nil, 0
+}
+
+func parseHeaders(lines [][]byte) map[string]string {
 	headers := make(map[string]string, len(lines))
 	for _, line := range lines {
-		idx := strings.IndexByte(line, ':')
+		idx := bytes.IndexByte(line, ':')
 		if idx < 0 {
 			continue
 		}
-		name := strings.TrimSpace(line[:idx])
-		value := strings.TrimSpace(line[idx+1:])
+		name := string(bytes.TrimSpace(line[:idx]))
+		value := string(bytes.TrimSpace(line[idx+1:]))
 		headers[name] = value
 	}
 	return headers

@@ -87,7 +87,8 @@ func (l *Loader) SetPIDFilter(pids []int) error {
 // progName is the BPF program section name (e.g., "uprobe_ssl_write").
 // libPath is the path to the shared library.
 // offset is the file offset of the symbol.
-func (l *Loader) AttachProbe(progName, libPath string, offset uint64) error {
+// isUretprobe specifies whether this is a return probe.
+func (l *Loader) AttachProbe(progName, libPath string, offset uint64, isUretprobe bool) error {
 	prog, ok := l.collection.Programs[progName]
 	if !ok {
 		return fmt.Errorf("program %s not found in collection", progName)
@@ -97,8 +98,6 @@ func (l *Loader) AttachProbe(progName, libPath string, offset uint64) error {
 	if err != nil {
 		return fmt.Errorf("open executable %s: %w", libPath, err)
 	}
-
-	isUretprobe := len(progName) > 11 && progName[:11] == "uretprobe_"
 
 	var lk link.Link
 	if isUretprobe {
@@ -118,42 +117,6 @@ func (l *Loader) AttachProbe(progName, libPath string, offset uint64) error {
 	return nil
 }
 
-// AttachAll attaches all provided symbol offsets to their corresponding BPF programs.
-// offsets maps symbol name -> file offset. The BPF program name is derived
-// from the symbol name (e.g., SSL_write -> uprobe/ssl_write).
-func (l *Loader) AttachAll(libPath string, offsets map[string]uint64) error {
-	// Define the mapping: symbol name -> list of BPF program section names
-	type probeSpec struct {
-		symbol string
-		progs  []string
-	}
-
-	specs := []probeSpec{
-		{"SSL_write", []string{"uprobe_ssl_write"}},
-		{"SSL_write_ex", []string{"uprobe_ssl_write_ex"}},
-		{"SSL_read", []string{"uprobe_ssl_read", "uretprobe_ssl_read"}},
-		{"SSL_read_ex", []string{"uprobe_ssl_read_ex", "uretprobe_ssl_read_ex"}},
-	}
-
-	for _, s := range specs {
-		offset, ok := offsets[s.symbol]
-		if !ok {
-			continue // symbol not found, skip
-		}
-		for _, progName := range s.progs {
-			if err := l.AttachProbe(progName, libPath, offset); err != nil {
-				return fmt.Errorf("attach %s: %w", progName, err)
-			}
-		}
-	}
-
-	if len(l.probes) == 0 {
-		return errors.New("no probes attached")
-	}
-
-	return nil
-}
-
 // AttachAllLibs attaches probes for all discovered TLS libraries.
 func (l *Loader) AttachAllLibs(libs []resolver.LibInfo) error {
 	for _, lib := range libs {
@@ -169,24 +132,28 @@ func (l *Loader) AttachAllLibs(libs []resolver.LibInfo) error {
 
 func (l *Loader) attachLib(lib resolver.LibInfo) error {
 	type probeSpec struct {
-		symbol string
-		progs  []string
+		symbol    string
+		progName  string
+		isReturn  bool
 	}
 
 	var specs []probeSpec
 	switch lib.Type {
 	case resolver.LibOpenSSL:
 		specs = []probeSpec{
-			{"SSL_write", []string{"uprobe_ssl_write"}},
-			{"SSL_write_ex", []string{"uprobe_ssl_write_ex"}},
-			{"SSL_read", []string{"uprobe_ssl_read", "uretprobe_ssl_read"}},
-			{"SSL_read_ex", []string{"uprobe_ssl_read_ex", "uretprobe_ssl_read_ex"}},
-			{"SSL_set_fd", []string{"uprobe_ssl_set_fd"}},
+			{"SSL_write", "uprobe_ssl_write", false},
+			{"SSL_write_ex", "uprobe_ssl_write_ex", false},
+			{"SSL_read", "uprobe_ssl_read", false},
+			{"SSL_read", "uretprobe_ssl_read", true},
+			{"SSL_read_ex", "uprobe_ssl_read_ex", false},
+			{"SSL_read_ex", "uretprobe_ssl_read_ex", true},
+			{"SSL_set_fd", "uprobe_ssl_set_fd", false},
 		}
 	case resolver.LibGnuTLS:
 		specs = []probeSpec{
-			{"gnutls_record_send", []string{"uprobe_gnutls_send"}},
-			{"gnutls_record_recv", []string{"uprobe_gnutls_recv", "uretprobe_gnutls_recv"}},
+			{"gnutls_record_send", "uprobe_gnutls_send", false},
+			{"gnutls_record_recv", "uprobe_gnutls_recv", false},
+			{"gnutls_record_recv", "uretprobe_gnutls_recv", true},
 		}
 	default:
 		return fmt.Errorf("unsupported library type: %v", lib.Type)
@@ -197,10 +164,8 @@ func (l *Loader) attachLib(lib resolver.LibInfo) error {
 		if !ok {
 			continue
 		}
-		for _, progName := range s.progs {
-			if err := l.AttachProbe(progName, lib.Path, offset); err != nil {
-				return fmt.Errorf("attach %s: %w", progName, err)
-			}
+		if err := l.AttachProbe(s.progName, lib.Path, offset, s.isReturn); err != nil {
+			return fmt.Errorf("attach %s: %w", s.progName, err)
 		}
 	}
 	return nil

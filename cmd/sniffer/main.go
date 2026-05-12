@@ -30,7 +30,7 @@ func main() {
 		fmt.Fprintf(os.Stderr, "Phase 2 features: bidirectional capture, PID/comm filtering,\n")
 		fmt.Fprintf(os.Stderr, "OpenSSL 3.x compatibility, partial read assembly.\n")
 		fmt.Fprintf(os.Stderr, "Phase 3.1: PCAP file output.\n")
-	fmt.Fprintf(os.Stderr, "Phase 3.2: JSON output, HTTP parsing, multi-library, connection tracking.\n\n")
+		fmt.Fprintf(os.Stderr, "Phase 3.2: JSON output, HTTP parsing, multi-library, connection tracking.\n\n")
 		flag.PrintDefaults()
 	}
 	flag.Parse()
@@ -178,13 +178,13 @@ func main() {
 			}, true
 		})
 		writer = pw
-		defer pw.Close()
 		fmt.Printf("[*] Writing pcap to %s\n", *pcapFileFlag)
 	case "json":
 		writer = event.NewJSONWriter()
 	default:
 		writer = event.NewStdoutWriter()
 	}
+	defer writer.Close()
 
 	// Handle signals: close loader to trigger clean shutdown
 	sigCh := make(chan os.Signal, 1)

@@ -9,7 +9,10 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"time"
 )
+
+const maxConnTrackEntries = 4096
 
 // ConnInfo holds the 4-tuple for a TLS connection.
 type ConnInfo struct {
@@ -17,6 +20,7 @@ type ConnInfo struct {
 	LocalPort  uint16
 	RemoteIP   net.IP
 	RemotePort uint16
+	lastSeen   time.Time
 }
 
 // ConnKey uniquely identifies a TLS stream.
@@ -27,7 +31,7 @@ type ConnKey struct {
 
 // ConnTracker maps SSL pointers to real TCP connection info.
 type ConnTracker struct {
-	mu    sync.Mutex
+	mu    sync.RWMutex
 	conns map[ConnKey]ConnInfo
 }
 
@@ -46,18 +50,49 @@ func (ct *ConnTracker) Track(pid uint32, sslPtr uint64, fd uint32) {
 
 	info, err := resolveConnInfo(pid, fd)
 	if err != nil {
-		// Can't resolve yet — connection may not be established
+		fmt.Fprintf(os.Stderr, "conntrack: resolve pid=%d ssl=0x%x fd=%d failed: %v\n", pid, sslPtr, fd, err)
 		return
 	}
+	info.lastSeen = time.Now()
 	ct.conns[key] = info
+
+	// Evict stale entries if map is too large
+	if len(ct.conns) > maxConnTrackEntries {
+		ct.evictStale()
+	}
 }
 
 // Lookup returns connection info for an SSL stream, if available.
 func (ct *ConnTracker) Lookup(pid uint32, sslPtr uint64) (ConnInfo, bool) {
-	ct.mu.Lock()
-	defer ct.mu.Unlock()
+	ct.mu.RLock()
+	defer ct.mu.RUnlock()
 	info, ok := ct.conns[ConnKey{PID: pid, SSLPTR: sslPtr}]
 	return info, ok
+}
+
+// evictStale removes the oldest half of entries. Must be called with ct.mu held.
+func (ct *ConnTracker) evictStale() {
+	type kv struct {
+		key  ConnKey
+		info ConnInfo
+	}
+	all := make([]kv, 0, len(ct.conns))
+	for k, v := range ct.conns {
+		all = append(all, kv{k, v})
+	}
+	// Sort by lastSeen ascending (oldest first)
+	for i := 0; i < len(all); i++ {
+		for j := i + 1; j < len(all); j++ {
+			if all[j].info.lastSeen.Before(all[i].info.lastSeen) {
+				all[i], all[j] = all[j], all[i]
+			}
+		}
+	}
+	// Remove oldest half
+	removeCount := len(all) / 2
+	for i := 0; i < removeCount; i++ {
+		delete(ct.conns, all[i].key)
+	}
 }
 
 // resolveConnInfo reads /proc to find the TCP 4-tuple for a given PID and fd.
