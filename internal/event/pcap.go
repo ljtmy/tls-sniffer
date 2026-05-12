@@ -1,6 +1,7 @@
 package event
 
 import (
+	"bufio"
 	"encoding/binary"
 	"fmt"
 	"hash/fnv"
@@ -9,6 +10,8 @@ import (
 	"sync"
 	"time"
 )
+
+const pcapBufSize = 64 * 1024 // 64KB write buffer
 
 // PCAP constants
 const (
@@ -57,8 +60,10 @@ func NewPCAPWriter(path string) (*PCAPWriter, error) {
 		return nil, fmt.Errorf("create pcap file: %w", err)
 	}
 
+	bw := bufio.NewWriterSize(f, pcapBufSize)
+
 	pw := &PCAPWriter{
-		w:       f,
+		w:       bw,
 		file:    f,
 		seqs:    make(map[streamSeqKey]uint32),
 		ipCache: make(map[uint32]uint32),
@@ -104,10 +109,13 @@ func (pw *PCAPWriter) Write(ev *AssembledEvent) {
 	pw.writePacketRecord(ts, packet)
 }
 
-// Close flushes and closes the pcap file.
+// Close flushes the buffer and closes the pcap file.
 func (pw *PCAPWriter) Close() error {
 	pw.mu.Lock()
 	defer pw.mu.Unlock()
+	if bw, ok := pw.w.(*bufio.Writer); ok {
+		bw.Flush()
+	}
 	if pw.file != nil {
 		return pw.file.Close()
 	}
