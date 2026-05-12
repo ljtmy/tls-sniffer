@@ -23,6 +23,7 @@ func main() {
 	bpfPath := flag.String("bpf", "bpf/sniffer.bpf.o", "path to compiled BPF object file")
 	outputFlag := flag.String("output", "text", "output format: text, pcap, or json")
 	pcapFileFlag := flag.String("pcap-file", "output.pcap", "pcap output file path (used with --output pcap)")
+	ringbufSizeFlag := flag.Int("ringbuf-size", 0, "ring buffer size in bytes (0 = default 256KB, e.g. 524288 for 512KB)")
 	flag.Usage = func() {
 		fmt.Fprintf(os.Stderr, "Usage: sniffer --pid <PID> [options]\n\n")
 		fmt.Fprintf(os.Stderr, "Sniff SSL/TLS plaintext via eBPF uprobe.\n\n")
@@ -68,7 +69,9 @@ func main() {
 	}
 
 	// Load BPF program
-	ldr, err := loader.New(*bpfPath)
+	ldr, err := loader.New(*bpfPath, &loader.Options{
+		RingBufSize: uint32(*ringbufSizeFlag),
+	})
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "error loading BPF: %v\n", err)
 		os.Exit(1)

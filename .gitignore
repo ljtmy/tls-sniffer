@@ -6,4 +6,4 @@ bpf/vmlinux.h
 # Test artifacts
 /tmp/
 *.pcap
-sniffer
+/sniffer

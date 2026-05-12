@@ -30,11 +30,23 @@ type Loader struct {
 	eventChan  chan *event.TLSEvent
 }
 
+// Options configures the BPF loader.
+type Options struct {
+	RingBufSize uint32 // ring buffer size in bytes, 0 = default 256KB
+}
+
 // New loads the BPF object file and returns a Loader ready for attaching.
-func New(bpfObjPath string) (*Loader, error) {
+func New(bpfObjPath string, opts *Options) (*Loader, error) {
 	spec, err := ebpf.LoadCollectionSpec(bpfObjPath)
 	if err != nil {
 		return nil, fmt.Errorf("load collection spec: %w", err)
+	}
+
+	// Override ring buffer size if specified
+	if opts != nil && opts.RingBufSize > 0 {
+		if m, ok := spec.Maps["events"]; ok {
+			m.MaxEntries = opts.RingBufSize
+		}
 	}
 
 	coll, err := ebpf.NewCollection(spec)
